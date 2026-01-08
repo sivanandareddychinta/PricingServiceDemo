@@ -342,8 +342,8 @@ class InMemoryPriceServiceTest {
 
             executor.shutdown();
 
-            // All instruments should have prices
-            assertThat(priceService.getPriceCount()).isEqualTo(numberOfProducers);
+            // Total published records equals producers * records per producer
+            assertThat(priceService.getPriceCount()).isEqualTo(numberOfProducers * recordsPerProducer);         
         }
 
         @Test
@@ -362,7 +362,12 @@ class InMemoryPriceServiceTest {
             // Start consumer threads that will query repeatedly
             for (int i = 0; i < 10; i++) {
                 consumerFutures.add(executor.submit(() -> {
-                    latch.await(); // Wait for signal
+                    try {
+                        latch.await(); // Wait for signal
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return Optional.empty();
+                    }
                     Optional<PriceRecord> price = priceService.getLastPrice("AAPL");
                     return price;
                 }));
@@ -370,15 +375,20 @@ class InMemoryPriceServiceTest {
 
             // Start producer threads that will upload batches
             List<Future<?>> producerFutures = new ArrayList<>();
-            for (int i = 0; i < 10; i++) {
-                producerFutures.add(executor.submit(() -> {
-                    latch.await(); // Wait for signal
-                    String batchId = priceService.startBatchRun();
-                    priceService.uploadRecords(batchId,
-                        Collections.singletonList(new PriceRecord("GOOGL", Instant.now(), 2800.0)));
-                    priceService.completeBatchRun(batchId);
-                }));
+    for (int i = 0; i < 10; i++) {
+        producerFutures.add(executor.submit(() -> {
+            try {
+                latch.await(); // Wait for signal
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // preserve interrupt status
+                return;
             }
+            String batchId = priceService.startBatchRun();
+            priceService.uploadRecords(batchId,
+                Collections.singletonList(new PriceRecord("GOOGL", Instant.now(), 2800.0)));
+            priceService.completeBatchRun(batchId);
+        }));
+    }
 
             // Start all threads simultaneously
             latch.countDown();
